@@ -1,0 +1,280 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+  <title>AR con Marcador Hiro - A-Frame + AR.js</title>
+
+  <!-- 1) A-Frame: el motor que dibuja el mundo 3D dentro del navegador.
+       Usamos la version oficial 1.6.0 (la que AR.js 3.4.7 requiere). -->
+  <script src="https://aframe.io/releases/1.6.0/aframe.min.js"></script>
+
+  <!-- 2) AR.js: añade la Realidad Aumentada (lectura de marcadores con camara)
+       sobre A-Frame. Usamos la version fija 3.4.7 (la mas reciente estable,
+       documentada oficialmente como compatible con A-Frame 1.6.0) servida
+       desde raw.githack, el CDN recomendado por los propios autores de AR.js. -->
+  <script src="https://raw.githack.com/AR-js-org/AR.js/3.4.7/aframe/build/aframe-ar.js"></script>
+
+  <style>
+    html, body {
+      margin: 0;
+      padding: 0;
+      overflow: hidden;
+      height: 100%;
+      background: #000;
+    }
+
+    /* Mensaje de ayuda fijo arriba */
+    #ayuda {
+      position: fixed;
+      top: 10px;
+      left: 0;
+      width: 100%;
+      text-align: center;
+      z-index: 999;
+      font-family: Arial, sans-serif;
+      color: #fff;
+      pointer-events: none;
+    }
+
+    #ayuda span {
+      background: rgba(0, 0, 0, 0.65);
+      padding: 8px 14px;
+      border-radius: 8px;
+      font-size: 14px;
+      display: inline-block;
+    }
+
+    /* Aviso de error que solo se muestra si algo sale mal (oculto por defecto) */
+    #aviso-error {
+      display: none;
+      position: fixed;
+      top: 50%;
+      left: 50%;
+      transform: translate(-50%, -50%);
+      z-index: 1000;
+      background: #b00020;
+      color: #fff;
+      font-family: Arial, sans-serif;
+      font-size: 14px;
+      padding: 16px 20px;
+      border-radius: 10px;
+      max-width: 85%;
+      line-height: 1.4;
+      box-shadow: 0 4px 14px rgba(0,0,0,0.4);
+    }
+
+    /* Panel de estado en vivo: muestra que SI esta pasando en cada momento
+       (carga de modelo, deteccion del marcador) sin necesidad de abrir
+       la consola del navegador. Util para diagnosticar en el celular. */
+    #estado {
+      position: fixed;
+      bottom: 10px;
+      left: 10px;
+      z-index: 999;
+      font-family: monospace;
+      font-size: 12px;
+      color: #0f0;
+      background: rgba(0, 0, 0, 0.7);
+      padding: 8px 10px;
+      border-radius: 8px;
+      line-height: 1.5;
+      pointer-events: none;
+    }
+
+    #estado .mal {
+      color: #ff5050;
+    }
+
+    #estado .bien {
+      color: #4dff4d;
+    }
+  </style>
+</head>
+
+<body>
+
+  <!-- Texto de ayuda fijo en la pantalla -->
+  <div id="ayuda">
+    <span>Apunta la camara al marcador "Hiro" para ver el modelo 3D</span>
+  </div>
+
+  <!-- Aviso que aparece SOLO si la pagina no se abrio en HTTPS/localhost
+       (la causa mas comun de que la camara no funcione) -->
+  <div id="aviso-error"></div>
+
+  <!-- Panel de estado en vivo, para diagnosticar directamente en el celular -->
+  <div id="estado">
+    <div>Modelo 3D: <span id="estado-modelo" class="mal">cargando...</span></div>
+    <div>Marcador Hiro: <span id="estado-marcador" class="mal">no detectado</span></div>
+  </div>
+
+  <script>
+    // Verificacion temprana: la camara solo funciona en contextos seguros.
+    // Si abres el archivo con doble clic (file://) o por http:// normal,
+    // el navegador bloquea el acceso a la camara silenciosamente.
+    (function comprobarContextoSeguro() {
+      var esSeguro = window.isSecureContext === true;
+      var esLocalhost = location.hostname === 'localhost' || location.hostname === '127.0.0.1';
+      if (!esSeguro && !esLocalhost) {
+        var caja = document.getElementById('aviso-error');
+        caja.style.display = 'block';
+        caja.innerHTML =
+          '<b>No se puede acceder a la camara.</b><br><br>' +
+          'Esta pagina debe abrirse por <b>HTTPS</b> (o en localhost). ' +
+          'Actualmente se abrio desde: <br><code>' + location.protocol + '//' + location.host + '</code><br><br>' +
+          'Sube este archivo a un hosting con HTTPS (GitHub Pages, Netlify, Vercel) ' +
+          'y abrelo desde esa direccion en tu celular.';
+      }
+    })();
+  </script>
+
+  <!--
+    a-scene: el contenedor de toda la escena de Realidad Aumentada.
+    - embedded: inserta la escena dentro de la pagina (no a pantalla completa tipo VR).
+    - arjs: configuracion de AR.js.
+        sourceType: webcam     -> usa la camara del celular (pide el permiso).
+        debugUIEnabled: false  -> oculta los menus de depuracion de AR.js.
+        detectionMode: mono_and_matrix -> detecta el marcador Hiro y otros tipos.
+    - vr-mode-ui: desactivado porque no usamos gafas VR.
+  -->
+  <a-scene
+    embedded
+    arjs="sourceType: webcam; debugUIEnabled: false; detectionMode: mono_and_matrix; matrixCodeType: 3x3; trackingMethod: best; facingMode: environment;"
+    vr-mode-ui="enabled: false"
+    renderer="logarithmicDepthBuffer: true; antialias: true;"
+    loading-screen="enabled: false"
+  >
+
+    <!--
+      a-assets: aqui "precargamos" el modelo 3D para que A-Frame lo tenga
+      listo antes de mostrarlo, y para poder detectar si falla la carga.
+    -->
+    <a-assets timeout="15000">
+      <a-asset-item
+        id="modelo-pato"
+        src="https://raw.githack.com/KhronosGroup/glTF-Sample-Assets/main/Models/Duck/glTF-Binary/Duck.glb">
+      </a-asset-item>
+    </a-assets>
+
+    <!--
+      a-marker: representa el marcador fisico que la camara reconoce.
+      preset="hiro" -> usa el marcador estandar "Hiro" incluido en AR.js
+      (el cuadrado blanco y negro con la palabra "HIRO" estilizada).
+      Todo lo de DENTRO de <a-marker> solo se muestra mientras la camara
+      ve ese marcador.
+    -->
+    <a-marker
+      preset="hiro"
+      id="marcador-hiro"
+      smooth="true"
+      smoothCount="10"
+      smoothTolerance="0.01"
+      smoothThreshold="5"
+    >
+
+      <!--
+        Modelo principal: el "Duck", el patito amarillo de prueba mas usado
+        en el mundo glTF, gratuito y de uso libre (Khronos Group).
+
+        - gltf-model="#modelo-pato" -> usa el recurso precargado arriba.
+        - position -> lo sube un poco para que no quede enterrado en el marcador.
+        - scale -> el pato original es bastante grande en unidades 3D del
+          archivo original; 0.006 lo deja con buen tamaño sobre el marcador
+          (el marcador Hiro mide 1 unidad de A-Frame de lado).
+        - animation -> gira el modelo en el eje Y (vertical), 360 grados,
+          en bucle infinito, de forma lineal, una vuelta cada 6 segundos.
+      -->
+      <a-entity
+        id="pato"
+        gltf-model="#modelo-pato"
+        position="0 0 0"
+        rotation="0 0 0"
+        scale="0.006 0.006 0.006"
+        animation="property: rotation; to: 0 360 0; loop: true; dur: 6000; easing: linear"
+        visible="false"
+      ></a-entity>
+
+      <!--
+        Modelo de respaldo: una esfera simple con la misma animacion de giro.
+        Solo se hace visible si el modelo glTF falla en cargar, para que
+        sepas que el marcador SI se detecta y el problema es otra cosa
+        (por ejemplo, el archivo del modelo).
+      -->
+      <a-sphere
+        id="respaldo"
+        radius="0.15"
+        position="0 0.15 0"
+        color="#1E90FF"
+        animation="property: rotation; to: 0 360 0; loop: true; dur: 4000; easing: linear"
+        visible="false"
+      ></a-sphere>
+
+      <!-- Luces para que el modelo se vea bien iluminado -->
+      <a-entity light="type: ambient; intensity: 0.9; color: #fff"></a-entity>
+      <a-entity light="type: directional; intensity: 0.6; color: #fff" position="1 1 1"></a-entity>
+
+    </a-marker>
+
+    <!--
+      a-entity camera: la camara virtual que AR.js mueve automaticamente
+      segun la posicion del marcador respecto a la camara fisica.
+    -->
+    <a-entity camera></a-entity>
+
+  </a-scene>
+
+  <script>
+    // Cuando A-Frame termine de cargar el componente <a-scene>,
+    // revisamos si el modelo 3D cargo bien o no, y mostramos
+    // el que corresponda (el pato o la esfera de respaldo).
+    var escena = document.querySelector('a-scene');
+    var spanModelo = document.getElementById('estado-modelo');
+    var spanMarcador = document.getElementById('estado-marcador');
+
+    escena.addEventListener('loaded', function () {
+      var pato = document.getElementById('pato');
+      var respaldo = document.getElementById('respaldo');
+
+      // Si el modelo termina de cargar correctamente, lo mostramos.
+      pato.addEventListener('model-loaded', function () {
+        pato.setAttribute('visible', 'true');
+        spanModelo.textContent = 'cargado OK';
+        spanModelo.className = 'bien';
+        console.log('Modelo 3D (pato) cargado correctamente.');
+      });
+
+      // Si el modelo falla (por ejemplo, sin conexion o URL caida),
+      // mostramos la esfera de respaldo para no dejar la pantalla vacia.
+      pato.addEventListener('model-error', function (evento) {
+        console.error('Error cargando el modelo 3D:', evento.detail);
+        respaldo.setAttribute('visible', 'true');
+        spanModelo.textContent = 'ERROR (ver esfera azul)';
+        spanModelo.className = 'mal';
+
+        var caja = document.getElementById('aviso-error');
+        caja.style.display = 'block';
+        caja.innerHTML =
+          '<b>No se pudo cargar el modelo 3D.</b><br><br>' +
+          'Se muestra una esfera azul de respaldo. Revisa tu conexion a ' +
+          'internet o que la URL del modelo siga disponible.';
+      });
+    });
+
+    // Aviso util en consola Y en pantalla cuando se detecta o se pierde
+    // el marcador, para confirmar que AR.js si esta funcionando.
+    var marcador = document.getElementById('marcador-hiro');
+    marcador.addEventListener('markerFound', function () {
+      console.log('Marcador Hiro detectado.');
+      spanMarcador.textContent = 'DETECTADO';
+      spanMarcador.className = 'bien';
+    });
+    marcador.addEventListener('markerLost', function () {
+      console.log('Marcador Hiro perdido de vista.');
+      spanMarcador.textContent = 'no detectado';
+      spanMarcador.className = 'mal';
+    });
+  </script>
+
+</body>
+</html>
